@@ -13,7 +13,7 @@ class RentalTests(unittest.TestCase):
         self.temp=tempfile.TemporaryDirectory(dir=directory)
         self.addCleanup(self.temp.cleanup)
         self.store=Store(Path(self.temp.name)/'test.sqlite3')
-        self.row=dict(link='https://www.dd-room.com/object/test1',title='測試兩房',price='20,000 元/月',area='10 坪',address='新北市板橋區文化路',metadata='整層住家 2房',tags=['可養貓'],images=[])
+        self.row=dict(link='https://www.dd-room.com/object/test1',title='測試兩房',price='20,000 元/月',area='10 坪',address='新北市板橋區文化路',metadata='整層住家 2房',tags=['可養貓'],images=[],detail={'status':'ok','text':''})
         self.filters=validate(DEFAULT)
     def test_filters_boundaries(self):
         row=normalize('ddroom',self.row)

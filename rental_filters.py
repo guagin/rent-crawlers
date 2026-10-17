@@ -1,6 +1,7 @@
 """Validated common filters, source adapters and conservative result matching."""
 import math
 import re
+from pet_policy import pet_match
 from urllib.parse import urlencode, urljoin, urlsplit, urlunsplit, parse_qsl
 
 SOURCES = {'591': '591', 'sinyi': '信義房屋', 'rakuya': '樂屋網', 'ddroom': 'DDROOM'}
@@ -166,10 +167,9 @@ def matches(row, f):
         if not row.get('kind'): unknown.append('房型')
     pet=f.get('pet')
     if pet:
-        pets=row.get('pets',[])
-        if row.get('pet_denied'): return False,[]
-        expected={'cat':'可養貓','dog':'可養狗','other':'可養其他寵物'}
-        if not pets or pet!='any' and expected[pet] not in pets: unknown.append('寵物')
+        decision,_=pet_match(row,pet)
+        if decision=='denied': return False,[]
+        if decision=='unknown': unknown.append('寵物')
     for field,label in [('elevator','電梯'),('ac','冷氣')]:
         if f.get(field):
             if row.get(field) is False: return False,[]

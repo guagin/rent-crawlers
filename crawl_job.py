@@ -9,6 +9,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit, urljoin
 from bs4 import BeautifulSoup
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.common.exceptions import TimeoutException
+from rental_details import DetailFetcher
 
 ROOT=Path(__file__).resolve().parent
 sys.path.insert(0,str(ROOT/'app'))
@@ -106,7 +107,18 @@ def run(job,output):
             if confirmed_end(source,soup,len(rows),page,len(page_rows)):
                 complete=True; break
             if page<limit: time.sleep(2)
-        result={'rows':rows,'complete':complete,'limited':not complete,'pages':page}
+        # Bound detail work so a large search cannot overrun the worker watchdog.
+        # Unread details remain unknown; a failed fetch never becomes permission.
+        fetcher=DetailFetcher();deadline=time.monotonic()+600;pending=0
+        try:
+            for index,row in enumerate(rows):
+                if time.monotonic()>deadline:
+                    pending=len(rows)-index;break
+                row['detail']=fetcher.fetch(source,row)
+                print(f'詳細頁 {index+1}/{len(rows)}：{row["detail"]["status"]}',flush=True)
+                if source not in fetcher.blocked:time.sleep(0.75)
+        finally:fetcher.close()
+        result={'rows':rows,'complete':complete,'limited':not complete,'pages':page,'details_pending':pending}
         output.write_text(json.dumps(result,ensure_ascii=False),encoding='utf-8')
     finally: driver.quit()
 

@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import sqlite3
 from rental_filters import SOURCES, normalize, matches, validate, source_identity
+from pet_policy import row_policy
 
 def now(): return datetime.now(timezone.utc).isoformat()
 def dump(value): return json.dumps(value,ensure_ascii=False,sort_keys=True)
@@ -28,6 +29,8 @@ class Store:
             CREATE INDEX IF NOT EXISTS listings_source ON listings(source,last_seen);
             CREATE INDEX IF NOT EXISTS jobs_status ON crawl_run_sources(status,id);
             CREATE INDEX IF NOT EXISTS history_listing ON listing_history(listing_id,id);
+            CREATE TABLE IF NOT EXISTS listing_details(listing_id INTEGER PRIMARY KEY REFERENCES listings(id),data TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS detail_checks(id INTEGER PRIMARY KEY,listing_id INTEGER NOT NULL REFERENCES listings(id),checked_at TEXT NOT NULL,status TEXT NOT NULL,data TEXT NOT NULL);
             ''')
             if 'snapshot' not in [r['name'] for r in db.execute('PRAGMA table_info(crawl_run_listings)')]:
                 db.execute('ALTER TABLE crawl_run_listings ADD COLUMN snapshot TEXT')
@@ -100,6 +103,12 @@ class Store:
         with self.connect() as db:
             for raw in rows:
                 row=normalize(source,raw)
+                attempt=row.get('detail')
+                identity=source_identity(source,row['link'])
+                prior=db.execute('SELECT d.data FROM listing_details d JOIN listings l ON l.id=d.listing_id WHERE l.source=? AND l.source_id=?',(source,identity)).fetchone()
+                if prior and (not row.get('detail') or row['detail'].get('status')!='ok'):
+                    row['detail']=json.loads(prior['data'])
+                    if attempt:row['detail']={**row['detail'],'last_attempt':attempt}
                 accepted,unknown=matches(row,filters) if filters else (True,[])
                 # Store discoveries even if they miss this run's conditions; only matches link to the run.
                 identity=source_identity(source,row['link'])
@@ -116,6 +125,10 @@ class Store:
                 if accepted:
                     saved+=1
                     if job: db.execute('INSERT OR REPLACE INTO crawl_run_listings(job_id,listing_id,unknown,snapshot) VALUES(?,?,?,?)',(job,ident,dump(unknown),encoded))
+                if row.get('detail'):
+                    db.execute('INSERT INTO listing_details VALUES(?,?) ON CONFLICT(listing_id) DO UPDATE SET data=excluded.data',(ident,dump(row['detail'])))
+                if attempt and attempt.get('checked_at'):
+                    db.execute('INSERT INTO detail_checks(listing_id,checked_at,status,data) VALUES(?,?,?,?)',(ident,attempt['checked_at'],attempt['status'],dump(attempt)))
         return saved
 
     def import_legacy(self,root):
@@ -148,16 +161,25 @@ class Store:
         sql='SELECT l.*,coalesce(a.favorite,0) favorite,coalesce(a.hidden,0) hidden,coalesce(a.contact,\'\') contact,coalesce(a.note,\'\') note FROM listings l LEFT JOIN listing_annotations a ON a.listing_id=l.id'
         if clauses: sql+=' WHERE '+' AND '.join(clauses)
         snapshots={}
+        details={};run_pet=''
         with self.connect() as db:
             rows=db.execute(sql,args).fetchall()
+            details={r['listing_id']:json.loads(r['data']) for r in db.execute('SELECT * FROM listing_details')}
             if body.get('run_id'):
                 snapshots={r['listing_id']:r for r in db.execute('SELECT m.* FROM crawl_run_listings m JOIN crawl_run_sources j ON j.id=m.job_id WHERE j.run_id=?',(int(body['run_id']),))}
+                run=db.execute('SELECT filters FROM crawl_runs WHERE id=?',(int(body['run_id']),)).fetchone()
+                if run:run_pet=json.loads(run['filters']).get('pet','')
         result=[]
         for raw in rows:
             snapshot=snapshots.get(raw['id'])
             item={**json.loads(snapshot['snapshot'] if snapshot and snapshot['snapshot'] else raw['data']),**{k:raw[k] for k in ('id','first_seen','last_seen','updated_at','favorite','hidden','contact','note')}}
+            if raw['id'] in details:item['detail']=details[raw['id']]
+            item['pet_policy']=row_policy(item)
+            if snapshot and run_pet and item['pet_policy'][run_pet]=='denied':continue
             accepted,unknown=matches(item,filters)
             if snapshot: unknown=list(dict.fromkeys(unknown+json.loads(snapshot['unknown'])))
+            if (filters.get('pet') or run_pet) and item['pet_policy'][filters.get('pet') or run_pet]=='allowed':
+                unknown=[x for x in unknown if x!='寵物']
             if accepted: result.append({**item,'unknown':unknown})
         sort=body.get('sort','last_seen')
         if sort not in ('last_seen','updated_at','rent_asc','rent_desc','area_desc'): raise ValueError('排序不支援')
@@ -183,7 +205,18 @@ class Store:
             if not row: raise ValueError('房源不存在')
             history=[{**dict(x),'data':json.loads(x['data'])} for x in db.execute('SELECT * FROM listing_history WHERE listing_id=? ORDER BY id DESC LIMIT 100',(ident,))]
             similar=[dict(x) for x in db.execute('SELECT id,source,title,address FROM listings WHERE id!=? AND source!=? AND title=?',(ident,row['source'],row['title']))]
-            return {'history':history,'possible_duplicates':similar}
+            detail=db.execute('SELECT data FROM listing_details WHERE listing_id=?',(ident,)).fetchone()
+            detail=json.loads(detail['data']) if detail else {}
+            return {'history':history,'possible_duplicates':similar,'detail':detail,'pet_policy':row_policy({**json.loads(row['data']),'detail':detail})}
+
+    def save_detail(self,ident,detail):
+        with self.connect() as db:
+            db.execute('INSERT INTO detail_checks(listing_id,checked_at,status,data) VALUES(?,?,?,?)',(ident,detail['checked_at'],detail['status'],dump(detail)))
+            previous=db.execute('SELECT data FROM listing_details WHERE listing_id=?',(ident,)).fetchone()
+            if detail['status']!='ok' and previous:
+                old=json.loads(previous['data'])
+                if old.get('status')=='ok':detail={**old,'last_attempt':detail}
+            db.execute('INSERT INTO listing_details VALUES(?,?) ON CONFLICT(listing_id) DO UPDATE SET data=excluded.data',(ident,dump(detail)))
 
     def backup(self,destination):
         with self.connect() as db:

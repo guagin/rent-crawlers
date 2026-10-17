@@ -52,6 +52,8 @@ class Worker:
             payload=json.loads(output_file.read_text(encoding='utf-8'))
             if not isinstance(payload.get('rows'),list): raise ValueError('爬蟲輸出格式錯誤')
             saved=self.store.ingest(job['source'],payload['rows'],job['id'],job['filters'])
+            incomplete=sum(r.get('detail',{}).get('status')!='ok' for r in payload['rows'])
+            if incomplete:self.store.log(job['id'],f'有 {incomplete} 筆詳細頁未完成（含驗證阻擋或時間上限）；沿用先前證據，其餘標為待確認。')
             state='completed_limited' if payload.get('limited') else 'completed'
             self.store.log(job['id'],f"完成：發現 {len(payload['rows'])} 筆；{saved} 筆符合條件（含允許的待確認資料）。"+(' 已達頁數上限。' if payload.get('limited') else ''))
             self.store.finish(job['id'],state,found=len(payload['rows']),saved=saved)
