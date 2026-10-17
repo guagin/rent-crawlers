@@ -1,6 +1,7 @@
 from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
+import os
 import time
 
 def use_disable_chrome_annoyings():
@@ -22,6 +23,10 @@ def write_file(output, file_name):
         return True
 
 def use_selenium():
+    # Keep Selenium Manager's cache inside the workspace, where it can write
+    # without requiring access to the user's profile directory.
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    os.environ.setdefault('SE_CACHE_PATH', os.path.join(project_root, '.selenium-cache'))
     options = use_disable_chrome_annoyings()
     driver = webdriver.Chrome(options=options)
     driver.implicitly_wait(10)

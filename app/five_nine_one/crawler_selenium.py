@@ -1,6 +1,7 @@
 import sys
 import os
 import time
+import re
 import pandas as pd
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dotenv import load_dotenv
@@ -66,20 +67,34 @@ def write_normal(driver, soup, start_url):
         items = soup.select('.list-wrapper .item')
         for item in items:
             image_lst = []
-            images = item.select('img[alt="物件圖片"]')
+            images = item.select('img.common-img')
             for image in images:
-                image_lst.append(image['data-src'])
-            title = item.select_one('a.link').text
-            link = item.select_one('a.link')['href']
-            area_and_floor = item.select('span.line')
-            area_data = area_and_floor[0]
-            floor_data = area_and_floor[1]
-            address_data = item.select('.item-info-txt')[1]
+                image_url = image.get('data-src') or image.get('src', '')
+                if image_url.startswith('http'):
+                    image_lst.append(image_url)
+            title_link = item.select_one('a.link')
+            title = title_link.get_text(strip=True)
+            link = title_link['href']
+
+            # Current 591 cards expose these values as text; older markup encoded
+            # them in styled <i> elements. Keep a fallback for the older format.
+            info_rows = item.select('.item-info-txt')
+            first_row = info_rows[0] if info_rows else None
+            line_texts = [node.get_text(' ', strip=True) for node in first_row.select('span.line')] if first_row else []
+            area = next((value for value in line_texts if '坪' in value), '')
+            floor = next((value for value in line_texts if '/' in value and ('F' in value or '樓' in value)), '')
+            if not area and first_row:
+                area = generate_area_text(first_row)
+            if not floor and first_row:
+                floor = generate_floor_text(first_row)
+
+            address = info_rows[1].get_text(' ', strip=True) if len(info_rows) > 1 else ''
+            if not address and len(info_rows) > 1:
+                address = generate_address_text(info_rows[1])
             price_data = item.select_one('div.item-info-price')
-            area = generate_area_text(area_data)
-            floor = generate_floor_text(floor_data)
-            address = generate_address_text(address_data)
-            price = generate_price_text(price_data)
+            price_text = price_data.get_text(' ', strip=True) if price_data else ''
+            price_match = re.search(r'[\d,]+(?:\.\d+)?\s*元/月', price_text)
+            price = price_match.group(0).strip() if price_match else generate_price_text(price_data) if price_data else ''
             data.append([title, price, address, floor, area, image_lst, link])
     data = []
     page = 1

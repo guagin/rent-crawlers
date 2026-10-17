@@ -3,4 +3,7 @@ static/*.json
 temp/
 __pycache__/
 chromedriver
+.selenium-cache/
 .env
+data/
+.venv/

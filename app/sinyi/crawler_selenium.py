@@ -2,6 +2,7 @@ import sys
 import os
 import time
 import pandas as pd
+from urllib.parse import urljoin
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dotenv import load_dotenv
 from libs.utils import get_page_content, write_file, use_selenium, render_images, render_link
@@ -26,7 +27,7 @@ def write_normal(driver, start_url):
                 current_image_src = first_image_src.replace('A', chr(65 + i))
                 image_lst.append(current_image_src)
             title = item.select_one('.item_title').text
-            link = item.select_one('a')['href']
+            link = urljoin(start_url, item.select_one('a')['href'])
             areaAndFloor = item.select_one('.detail_line2')
             area = areaAndFloor.select('span')[2].text.replace('\n', '')
             floor = areaAndFloor.select('span')[4].text.replace('\n', '')
